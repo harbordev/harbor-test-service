@@ -1,0 +1,25 @@
+services:
+  harbor-test-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: harbor-test-service
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=Harbor FastAPI Test Service
+      - APP_VERSION=1.0.0
+      - ENVIRONMENT=local-docker
+      - HARBOR_PROJECT_ID=proj-local-test
+      - HARBOR_SERVICE_ID=srv-test-fastapi
+      - HARBOR_DEPLOYMENT_ID=1001
+      - HARBOR_ENVIRONMENT=development
+      - GIT_COMMIT_SHA=local-dev-commit
+      - TEST_SECRET=harbor_injected_sample_secret
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
