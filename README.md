@@ -1,18 +1,18 @@
 # Harbor Test Service (`harbor-test-service`)
 
-A lightweight Python FastAPI backend service designed specifically to test, validate, and demonstrate the [Harbor Platform](https://github.com/shanelperera/harbor) deployment lifecycle, GitHub Actions orchestration, environment injection, and status callbacks.
+A lightweight Python FastAPI backend service designed specifically to test and demonstrate the [Harbor Platform](https://github.com/shanelperera/harbor) deployment lifecycle, GitHub Actions orchestration, environment injection, and health monitoring.
 
 ---
 
 ## Features
 
-- **FastAPI Core**: Async, clean REST APIs with Pydantic v2 schemas and request validation.
-- **Harbor Integration Contract**:
+- **FastAPI Core**: Async REST API with Pydantic v2 schemas and request validation.
+- **Harbor Native Integration**:
   - Implements `.github/workflows/deploy.yml` with Harbor's 6 mandatory `workflow_dispatch` inputs.
-  - Generates HMAC-SHA256 signatures (`X-Harbor-Signature`) for status callbacks (`Running`, `Succeeded`, `Failed`) back to Harbor's `/api/deployments/{id}/status`.
+  - Zero secrets or curl callbacks needed in repository settings — Harbor tracks deployment progress automatically via GitHub App `workflow_run` webhooks.
 - **Health Probes**: Liveness (`/health/live`) and Readiness (`/health/ready`) endpoints.
 - **Environment Ingestion Verification**: `/api/v1/info` and `/api/v1/env-check` return runtime diagnostics and Harbor deployment metadata (`HARBOR_PROJECT_ID`, `HARBOR_SERVICE_ID`, `HARBOR_DEPLOYMENT_ID`, `GIT_COMMIT_SHA`).
-- **Comprehensive Test Suite**: Pytest + HTTPX async tests with 100% route coverage.
+- **Test Suite**: Pytest + HTTPX async tests with 98% route coverage.
 - **Secure Docker Container**: Multi-stage build running as non-root user `appuser` (UID 10001) with internal container health checks.
 
 ---
@@ -24,7 +24,7 @@ harbor-test-service/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml                 # CI: Ruff linter & Pytest on push/PR
-│       └── deploy.yml             # Harbor deployment dispatch & status callback
+│       └── deploy.yml             # Harbor deployment dispatch workflow
 ├── app/
 │   ├── main.py                    # FastAPI entrypoint, lifespan, and CORS setup
 │   ├── core/
@@ -58,22 +58,17 @@ harbor-test-service/
 
 ---
 
-## Harbor Dispatch & Callback Contract
+## Harbor Dispatch Contract
 
-### 1. `workflow_dispatch` Inputs
-When Harbor deploys a service, it triggers `.github/workflows/deploy.yml` with:
+When Harbor deploys this service, it triggers `.github/workflows/deploy.yml` with:
 - `environment`: Target environment name (`Development`, `Staging`, `Production`)
 - `project`: Harbor project ID
 - `service`: Harbor service ID
 - `deployment_id`: Harbor internal deployment ID
 - `version`: Branch, tag, or version string
-- `commit_sha`: Git commit SHA (or blank)
+- `commit_sha`: Git commit SHA (optional)
 
-### 2. Status Callbacks to Harbor
-During workflow execution, the job reports status back to Harbor:
-- **Endpoint**: `POST {HARBOR_API_BASE_URL}/api/deployments/{deployment_id}/status`
-- **Header**: `X-Harbor-Signature: <hex_hmac_sha256>`
-- **Payload**: `{"status": "Running" | "Succeeded" | "Failed", "failureReason": "..."}`
+Harbor's GitHub App listens for the workflow run completion and automatically updates the deployment state in the Harbor UI and event stream.
 
 ---
 
@@ -88,10 +83,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 ### 2. Run Tests & Linter
 ```bash
-# Run pytest with coverage
 pytest
-
-# Run linter
 ruff check .
 ruff format --check .
 ```
@@ -100,7 +92,6 @@ ruff format --check .
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
-Visit http://localhost:8000/docs for the Swagger UI.
 
 ### 4. Run via Docker Compose
 ```bash

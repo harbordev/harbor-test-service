@@ -4,65 +4,43 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target deployment environment (e.g. Development, Staging, Production)"
+        description: "Target deployment environment"
         required: true
         type: string
       project:
-        description: "Harbor project public or database ID"
+        description: "Harbor project ID"
         required: true
         type: string
       service:
-        description: "Harbor service public or database ID"
+        description: "Harbor service ID"
         required: true
         type: string
       deployment_id:
-        description: "Harbor internal deployment ID for status callback"
+        description: "Harbor deployment ID"
         required: true
         type: string
       version:
-        description: "Selected deployment version, tag, or branch"
+        description: "Target version, branch, or tag"
         required: true
         type: string
       commit_sha:
-        description: "Exact Git commit SHA"
+        description: "Target Git commit SHA"
         required: false
         type: string
 
-permissions:
-  contents: read
-
 jobs:
   deploy:
-    name: Harbor Deployment Execution
+    name: Build & Validate Service
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit_sha != '' && inputs.commit_sha || inputs.version }}
 
-      - name: Notify Harbor: Deployment Started (Running)
-        if: always()
-        env:
-          HARBOR_API_BASE_URL: ${{ vars.HARBOR_API_BASE_URL }}
-          HARBOR_WEBHOOK_SECRET: ${{ secrets.HARBOR_WEBHOOK_SECRET }}
-        run: |
-          if [ -n "$HARBOR_API_BASE_URL" ] && [ -n "$HARBOR_WEBHOOK_SECRET" ]; then
-            echo "Notifying Harbor of status: Running"
-            body='{"status":"Running"}'
-            signature=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$HARBOR_WEBHOOK_SECRET" -hex | cut -d' ' -f2)
-            curl --fail-with-body -sS -X POST \
-              "${HARBOR_API_BASE_URL%/}/api/deployments/${{ inputs.deployment_id }}/status" \
-              -H "Content-Type: application/json" \
-              -H "X-Harbor-Signature: $signature" \
-              --data-binary "$body" || echo "Warning: Status callback to Harbor failed (check runner network connectivity)."
-          else
-            echo "HARBOR_API_BASE_URL or HARBOR_WEBHOOK_SECRET not set; skipping start callback."
-          fi
-
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -73,23 +51,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Execute Tests
+      - name: Run Pytest Suite
         run: |
           pytest
 
       - name: Build Docker Container
         run: |
-          echo "Building image for environment: ${{ inputs.environment }}"
+          echo "Building container for deployment ${{ inputs.deployment_id }} (${{ inputs.environment }})"
           docker build \
             --build-arg GIT_COMMIT_SHA="${{ inputs.commit_sha }}" \
-            --build-arg HARBOR_DEPLOYMENT_ID="${{ inputs.deployment_id }}" \
             -t harbor-test-service:${{ inputs.version }} \
             -t harbor-test-service:latest .
 
-      - name: Simulate Deployment / Container Run Check
+      - name: Verify Container Health
         run: |
-          echo "Testing container startup and health probe..."
-          docker run -d --name test-container -p 8000:8000 \
+          docker run -d --name test-app -p 8000:8000 \
             -e ENVIRONMENT="${{ inputs.environment }}" \
             -e HARBOR_PROJECT_ID="${{ inputs.project }}" \
             -e HARBOR_SERVICE_ID="${{ inputs.service }}" \
@@ -97,39 +73,6 @@ jobs:
             -e GIT_COMMIT_SHA="${{ inputs.commit_sha }}" \
             harbor-test-service:latest
 
-          sleep 5
-          docker logs test-container
+          sleep 3
           curl --fail http://localhost:8000/health/live
-          docker rm -f test-container
-
-      - name: Notify Harbor: Final Deployment Status (Succeeded or Failed)
-        if: always()
-        env:
-          HARBOR_API_BASE_URL: ${{ vars.HARBOR_API_BASE_URL }}
-          HARBOR_WEBHOOK_SECRET: ${{ secrets.HARBOR_WEBHOOK_SECRET }}
-        run: |
-          if [ "${{ job.status }}" = "success" ]; then
-            status="Succeeded"
-            reason=""
-          else
-            status="Failed"
-            reason="GitHub Actions deployment job failed during execution steps."
-          fi
-
-          if [ -n "$HARBOR_API_BASE_URL" ] && [ -n "$HARBOR_WEBHOOK_SECRET" ]; then
-            echo "Notifying Harbor of final status: $status"
-            if [ -n "$reason" ]; then
-              body="{\"status\":\"$status\",\"failureReason\":\"$reason\"}"
-            else
-              body="{\"status\":\"$status\"}"
-            fi
-
-            signature=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$HARBOR_WEBHOOK_SECRET" -hex | cut -d' ' -f2)
-            curl --fail-with-body -sS -X POST \
-              "${HARBOR_API_BASE_URL%/}/api/deployments/${{ inputs.deployment_id }}/status" \
-              -H "Content-Type: application/json" \
-              -H "X-Harbor-Signature: $signature" \
-              --data-binary "$body"
-          else
-            echo "HARBOR_API_BASE_URL or HARBOR_WEBHOOK_SECRET not set; skipping final callback."
-          fi
+          docker rm -f test-app
